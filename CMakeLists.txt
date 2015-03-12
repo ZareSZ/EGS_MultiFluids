@@ -1,5 +1,5 @@
 ##
-#  CMake script for the step-21 tutorial program:
+#  CMake script for the EGS_MultiFluids program:
 ##
 
 # Set the name of the project and target:
