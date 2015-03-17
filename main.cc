@@ -1,5 +1,5 @@
 // This program will be used to simulate injection of a fluide
-// into a reservoir (500m/500m/500m) at a depth of 4.5 km (50m grid )
+// into a reservoir-point source-(500m/500m/500m) at a depth of 4.5 km (50m grid )
 // using the open source library "deal.II"
 
 #include <deal.II/base/quadrature_lib.h>
@@ -17,6 +17,7 @@
 #include <deal.II/grid/grid_generator.h>
 #include <deal.II/grid/tria_accessor.h>
 #include <deal.II/grid/tria_iterator.h>
+#include <deal.II/grid/tria_boundary_lib.h>
 #include <deal.II/grid/grid_tools.h>
 
 #include <deal.II/dofs/dof_handler.h>
@@ -110,9 +111,8 @@ namespace EGS_MultiFluids
   }
 
 
-//  Pressure boundary values}
-  // Pressure boundary values
-  // we choose a linear pressure field
+//  Pressure boundary values
+  // Pressure boundary values (linear pressure field)
 
   template <int dim>
   class PressureBoundaryValues : public Function<dim>
@@ -130,7 +130,28 @@ namespace EGS_MultiFluids
   PressureBoundaryValues<dim>::value (const Point<dim>  &p,
                                       const unsigned int /*component*/) const
   {
-    return 1-p[0];
+    return 0;//1-p[0];
+  }
+
+   // Pressure Boundary Value Hole
+
+  template <int dim>
+  class PressureBoundaryValuesHole : public Function<dim>
+  {
+  public:
+    PressureBoundaryValuesHole () : Function<dim>(1) {}
+
+    virtual double value (const Point<dim>   &p,
+                          const unsigned int  component = 0) const;
+  };
+
+
+  template <int dim>
+  double
+  PressureBoundaryValuesHole<dim>::value (const Point<dim>  &p,
+                                      const unsigned int /*component*/) const
+  {
+    return 1;
   }
 
 
@@ -157,12 +178,34 @@ namespace EGS_MultiFluids
   SaturationBoundaryValues<dim>::value (const Point<dim> &p,
                                         const unsigned int /*component*/) const
   {
-    if (p[0] == 0)
-      return 1;
+    if (p[1] == 0)
+      return 0;//1;
     else
       return 0;
   }
 
+
+  // Saturation Boudary Value Hole
+
+  template <int dim>
+  class SaturationBoundaryValuesHole : public Function<dim>
+  {
+  public:
+    SaturationBoundaryValuesHole () : Function<dim>(1) {}
+
+    virtual double value (const Point<dim>   &p,
+                          const unsigned int  component = 0) const;
+  };
+
+
+
+  template <int dim>
+  double
+  SaturationBoundaryValuesHole<dim>::value (const Point<dim> &p,
+                                        const unsigned int /*component*/) const
+  {
+    return 1;
+  }
 
 
 // Initial data
@@ -200,12 +243,10 @@ namespace EGS_MultiFluids
   }
 
 
-
-
 // The inverse permeability tensor
 
-  // As announced in the introduction, we implement two different permeability
-  // tensor fields. Each of them we put into a namespace of its own, so that
+  // Two different permeability tensor fields.
+  // Each of them puted into a namespace of its own, so that
   // it will be easy later to replace use of one by the other in the code.
 
 // Single curving crack permeability
@@ -295,6 +336,9 @@ namespace EGS_MultiFluids
                                throw ExcNotImplemented()));
 
       std::vector<Point<dim> > centers_list (N);
+
+      srand(3);  // any number for randomness into (ran(ex: 3))
+
       for (unsigned int i=0; i<N; ++i)
         for (unsigned int d=0; d<dim; ++d)
           centers_list[i][d] = static_cast<double>(rand())/RAND_MAX;
@@ -331,7 +375,6 @@ namespace EGS_MultiFluids
   }
 
 
-
 // The inverse mobility and saturation functions
 
   double mobility_inverse (const double S,
@@ -345,8 +388,6 @@ namespace EGS_MultiFluids
   {
     return S*S / (S * S + viscosity * (1-S) * (1-S));
   }
-
-
 
 
 
@@ -461,8 +502,6 @@ namespace EGS_MultiFluids
   }
 
 
-
-
  //TwoPhaseFlowProblem class implementation
 
   // TwoPhaseFlowProblem::TwoPhaseFlowProblem
@@ -479,7 +518,7 @@ namespace EGS_MultiFluids
         FE_DGQ<dim>(degree), 1,
         FE_DGQ<dim>(degree), 1),
     dof_handler (triangulation),
-    n_refinement_steps (6),
+    n_refinement_steps (5),
     time_step (0),
     viscosity (0.2)
   {}
@@ -491,8 +530,60 @@ namespace EGS_MultiFluids
   template <int dim>
   void TwoPhaseFlowProblem<dim>::make_grid_and_dofs ()
   {
-    GridGenerator::hyper_cube (triangulation, 0, 1);
-    triangulation.refine_global (n_refinement_steps);
+    //GridGenerator::hyper_cube (triangulation, 0, 1);
+    //triangulation.refine_global (n_refinement_steps);
+
+      const double      inner_radius = 0.01;
+      const double      outer_radius = 0.5;
+      const double      L = 0.5;
+      GridGenerator::hyper_cube_with_cylindrical_hole (triangulation,
+              inner_radius ,
+              outer_radius ,
+              L);
+
+      std::vector<bool> vertex_touched (triangulation.n_vertices(),
+                                          false);
+      typename Triangulation<dim>::active_cell_iterator
+      cell = triangulation.begin_active(),
+      endc = triangulation.end();
+      for (; cell!=endc; ++cell)
+      {
+      for (unsigned int i=0; i<GeometryInfo<dim>::vertices_per_cell; ++i)
+      {
+          if (vertex_touched[cell->vertex_index(i)] == false)
+          {
+              vertex_touched[cell->vertex_index(i)] = true;
+              Point<dim> &v = cell->vertex(i);
+              v(0) += 0.5;
+              v(1) += 0.5;
+          }
+      }
+      }
+
+
+      for (typename Triangulation<dim>::active_cell_iterator
+          cell=triangulation.begin_active();
+          cell!=triangulation.end(); ++cell)
+      {
+          for (unsigned int f=0; f<GeometryInfo<dim>::faces_per_cell; ++f)
+          {
+              if (cell->face(f)->at_boundary())
+              {
+                  const Point<dim> face_center = cell->face(f)->center();
+                  if (face_center[0] == 0){
+                  cell->face(f)->set_boundary_indicator (2);
+                  }
+                  else if (face_center[0] == 1)
+                  cell->face(f)->set_boundary_indicator (2);
+              }
+          }
+      }
+      const HyperBallBoundary<dim> boundary_description(Point<dim>(0.5,0.5), inner_radius);
+      triangulation.set_boundary (1, boundary_description);
+
+      triangulation.refine_global (n_refinement_steps);
+
+      triangulation.set_boundary (1);
 
     dof_handler.distribute_dofs (fe);
     DoFRenumbering::component_wise (dof_handler);
@@ -585,6 +676,7 @@ namespace EGS_MultiFluids
 
     const PressureRightHandSide<dim>  pressure_right_hand_side;
     const PressureBoundaryValues<dim> pressure_boundary_values;
+    const PressureBoundaryValuesHole<dim> pressure_boundary_values_hole;
     const RandomMedium::KInverse<dim> k_inverse;
 
     std::vector<double>               pressure_rhs_values (n_q_points);
@@ -667,7 +759,8 @@ namespace EGS_MultiFluids
         for (unsigned int face_no=0;
              face_no<GeometryInfo<dim>::faces_per_cell;
              ++face_no)
-          if (cell->at_boundary(face_no))
+             {
+                 if (cell->at_boundary(face_no))
             {
               fe_face_values.reinit (cell, face_no);
 
@@ -688,6 +781,27 @@ namespace EGS_MultiFluids
                   }
             }
 
+        if (cell->at_boundary() && cell->face(face_no)->boundary_indicator() == 1)
+        {
+            pressure_boundary_values_hole
+          .value_list (fe_face_values.get_quadrature_points(),
+                       boundary_values);
+
+          for (unsigned int q=0; q<n_face_q_points; ++q)
+            for (unsigned int i=0; i<dofs_per_cell; ++i)
+              {
+                const Tensor<1,dim>
+                phi_i_u = fe_face_values[velocities].value (i, q);
+
+                local_rhs(i) += -(phi_i_u *
+                                  fe_face_values.normal_vector(q) *
+                                  boundary_values[q] *
+                                  fe_face_values.JxW(q));
+              }
+         }
+        }
+
+
         // The final step in the loop over all cells is to transfer local
         // contributions into the global matrix and right hand side vector:
         cell->get_dof_indices (local_dof_indices);
@@ -701,6 +815,8 @@ namespace EGS_MultiFluids
           system_rhs(local_dof_indices[i]) += local_rhs(i);
       }
   }
+
+
 
 
   // So much for assembly of matrix and right hand side. Note that we do not
@@ -743,6 +859,7 @@ namespace EGS_MultiFluids
     std::vector<types::global_dof_index> local_dof_indices (dofs_per_cell);
 
     SaturationBoundaryValues<dim> saturation_boundary_values;
+    SaturationBoundaryValuesHole<dim> saturation_boundary_values_hole;
 
     const FEValuesExtractors::Scalar saturation (dim+1);
 
@@ -818,6 +935,26 @@ namespace EGS_MultiFluids
                   neighbor_saturation[q] = old_solution_values_face_neighbor[q](dim+1);
               }
 
+            if (cell->at_boundary() && cell->face(face_no)->boundary_indicator() == 1)
+          {
+//                 std::cout << "Yeah" << std::endl;
+              saturation_boundary_values_hole
+            .value_list (fe_face_values.get_quadrature_points(),
+                         neighbor_saturation);
+
+//               for (unsigned int q=0; q<n_face_q_points; ++q)
+//                 for (unsigned int i=0; i<dofs_per_cell; ++i)
+//                   {
+//                     const Tensor<1,dim>
+//                     phi_i_u = fe_face_values[velocities].value (i, q);
+//
+//                     local_rhs(i) += -(phi_i_u *
+//                                       fe_face_values.normal_vector(q) *
+//                                       boundary_values[q] *
+//                                       fe_face_values.JxW(q));
+//                   }
+//              }
+          }
 
             for (unsigned int q=0; q<n_face_q_points; ++q)
               {
